@@ -10,10 +10,10 @@
 	// Set your OAuth credentials here  
 	// These credentials can be obtained from the 'Manage API Access' page in the
 	// developers documentation (http://www.yelp.com/developers)
-	$CONSUMER_KEY = '';
-	$CONSUMER_SECRET = '';
-	$TOKEN = '';
-	$TOKEN_SECRET = '';
+	$CONSUMER_KEY = 'zaPV9XZZ64q9onFN6AW5Lg';
+	$CONSUMER_SECRET = 'jonYwXHyBUoHpC49t2EIsbIc1fs';
+	$TOKEN = 'rZlskOUtDw2q22rN8anTt9K7oa5Fvm45';
+	$TOKEN_SECRET = 'LJy9crAo0eUwBT1e5FrCzIXyKmg';
 	$API_HOST = 'api.yelp.com';
 	$DEFAULT_TERM = 'dinner';
 	$DEFAULT_LOCATION = 'San Francisco, CA';
@@ -137,10 +137,12 @@ function phone_search($phone) {
 				unset($data['state']);
 				$b_hash[$data["business_id"]] = $data;
 				$b_hash[$data["business_id"]]["inspections"] = array();
+				$b_hash[$data["business_id"]]["yelp_review_count"] = "";
 				$b_hash[$data["business_id"]]["yelp_rating"] = "";
 				$b_hash[$data["business_id"]]["yelp_rating_img"] = "";
 				$b_hash[$data["business_id"]]["yelp_img"] = "";
 				$b_hash[$data["business_id"]]["yelp_review_snippet"] = "";
+				$b_hash[$data["business_id"]]["yelp_id"] = "";
 			}
 		}
 		fclose($handle);
@@ -247,7 +249,7 @@ function phone_search($phone) {
 		for($i=0; $i<$c; $i++) {
 			$a_rec = $inspection_recs[$i];
 			if($a_rec["date"] >= $most_recent_date) {
-				$most_recent_date = $a_rec["date"];
+				$most_recent_date = $a_rec["date"] ? $a_rec["date"] : "-1";
 				$most_recent_score = $a_rec["score"];
 				$most_recent_type = $a_rec["type"];
 				$most_recent_violations = $a_rec["violations"];
@@ -266,7 +268,15 @@ function phone_search($phone) {
 		$b_hash[$key]["score_category"] = $most_recent_score_category;
 		$b_hash[$key]["date"] = $most_recent_date;
 		$b_hash[$key]["type"] = $most_recent_type;
-		$b_hash[$key]["violation"] = implode("\\n", $most_recent_violations);
+
+		$v_cnt = count($most_recent_violations);
+		$v_html_str = "<ul>";
+		for($k=0; $k<$v_cnt; $k++) {
+			$v_html_str .= "<li>" . $most_recent_violations[$k] . "</li>";
+		}
+		$v_html_str .= "</ul>";
+
+		$b_hash[$key]["violation"] = $v_html_str;
 
 		//reset
 		$most_recent_date = 0;
@@ -275,6 +285,7 @@ function phone_search($phone) {
 		$most_recent_violations = array();
 		$most_recent_score_category = "";
 	}
+
 
 	// now go through each record and query yelp api by phone number to get rating, review, and image data
 	if($yelp) {
@@ -295,10 +306,12 @@ function phone_search($phone) {
 					echo $count . ": trying to get yelp data for business id: " . $key . " - " . $value["name"] . ", " . $value["phone_number"];
 					$data = json_decode(phone_search($p));
 					if($data->{'total'} >= 1) {
+						$b_hash[$key]["yelp_review_count"] = array_key_exists('review_count', $data->{'businesses'}[0]) ? $data->{'businesses'}[0]->{'review_count'} : "";
 						$b_hash[$key]["yelp_rating"] = array_key_exists('rating', $data->{'businesses'}[0]) ? $data->{'businesses'}[0]->{'rating'} : "";
 						$b_hash[$key]["yelp_rating_img"] = array_key_exists('rating_img_url_large', $data->{'businesses'}[0]) ? $data->{'businesses'}[0]->{'rating_img_url_large'} : "";
 						$b_hash[$key]["yelp_img"] = array_key_exists('image_url', $data->{'businesses'}[0]) ? $data->{'businesses'}[0]->{'image_url'} : "";
 						$b_hash[$key]["yelp_review_snippet"] = array_key_exists('snippet_text', $data->{'businesses'}[0]) ? $data->{'businesses'}[0]->{'snippet_text'} : "";
+						$b_hash[$key]["yelp_id"] = array_key_exists('id', $data->{'businesses'}[0]) ? $data->{'businesses'}[0]->{'id'} : "";
 						echo " - yes\n";
 					}
 					else {
@@ -363,20 +376,55 @@ function phone_search($phone) {
 	// 	// fputcsv($merged_file, $value);
 	// }
 	// fclose($merged_file);
-	
-	$merged_file = fopen("merged-tmp.csv", "w");
+
+	// split the csv into chunks
+	// pantheon chokes a lot on big files
+
+	$limit = 500;
+	$limit_cnt = 0;
+	$file_index = 0;
+	$rec_count = 0;
+
 	$firstLineKeys = false; 
+	$merged_file_all = fopen("merged-tmp-all.csv", "w");
+	$merged_file = fopen("merged-tmp-".$file_index.".csv", "w");
 	foreach($b_hash as $key => $value) {
+
+		if($limit_cnt == $limit) {
+			fclose($merged_file);
+			$file_index++;
+			$limit_cnt = 0;
+			$firstLineKeys = false;
+			$merged_file = fopen("merged-tmp-".$file_index.".csv", "w");
+		}
+
 		$rec = $value;
+		unset($rec["inspections"]);
 		if(empty($firstLineKeys)) {
 			$firstLineKeys = array_keys($rec);
 			fputcsv($merged_file, $firstLineKeys);
+			fputcsv($merged_file_all, $firstLineKeys);
 			$firstLineKeys = array_flip($firstLineKeys);
 		}
-		$rec["inspections"] = json_encode($rec["inspections"]);
+		// $json_inspections = json_encode($rec["inspections"]);
+		// $json_inspections = str_replace('"', "'", $json_inspections);
+		// $rec["inspections"] = $json_inspections;
+		if($rec["date"] <= 0) {
+			$rec["date"] = "";
+		}
+		if($rec["Score"] <= 0) {
+			$rec["Score"] = "";
+		}
 		fputcsv($merged_file, array_merge($firstLineKeys, $rec));
+		fputcsv($merged_file_all, array_merge($firstLineKeys, $rec));
+		$limit_cnt++;
+		$rec_count++;
 	}
 	fclose($merged_file);
+
+	echo "\n\ncreated " . ($file_index+1) . " files for import";
+
+	echo "\n\ntotal records: " . $rec_count;
 
 	$time_end = microtime(true);
 	$time = $time_end - $time_start;
